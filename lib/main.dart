@@ -16,55 +16,65 @@ Future<void> main() async {
       '{filename}',
     ),
     error: const TaskNotification(
-      'تعذر التنزيل',
+      'فشل التنزيل',
       '{filename}',
     ),
     progressBar: true,
     tapOpensFile: true,
   );
 
+  await FileDownloader().transfers.rehydrateFromDatabase();
+
   runApp(const BahmedIDM());
 }
+
+class AppSettings extends ChangeNotifier {
+  ThemeMode themeMode = ThemeMode.dark;
+
+  void toggleTheme() {
+    themeMode = themeMode == ThemeMode.dark
+        ? ThemeMode.light
+        : ThemeMode.dark;
+    notifyListeners();
+  }
+}
+
+final appSettings = AppSettings();
 
 class BahmedIDM extends StatelessWidget {
   const BahmedIDM({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'BAHMED IDM',
-      theme: _theme(Brightness.light),
-      darkTheme: _theme(Brightness.dark),
-      themeMode: ThemeMode.dark,
-      home: const HomePage(),
+    return AnimatedBuilder(
+      animation: appSettings,
+      builder: (context, _) {
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'BAHMED IDM',
+          themeMode: appSettings.themeMode,
+          theme: buildTheme(Brightness.light),
+          darkTheme: buildTheme(Brightness.dark),
+          home: const HomePage(),
+        );
+      },
     );
   }
 
-  ThemeData _theme(Brightness brightness) {
+  ThemeData buildTheme(Brightness brightness) {
     final dark = brightness == Brightness.dark;
-
-    final scheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF00E5FF),
-      brightness: brightness,
-      surface: dark ? const Color(0xFF111827) : Colors.white,
-    );
 
     return ThemeData(
       useMaterial3: true,
       brightness: brightness,
-      colorScheme: scheme,
-      scaffoldBackgroundColor:
-          dark ? const Color(0xFF090E18) : const Color(0xFFF3F6FA),
-      appBarTheme: AppBarTheme(
-        backgroundColor:
-            dark ? const Color(0xFF090E18) : Colors.white,
-        foregroundColor:
-            dark ? Colors.white : Colors.black87,
-        centerTitle: false,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xFF00D9FF),
+        brightness: brightness,
       ),
+      scaffoldBackgroundColor:
+          dark ? const Color(0xFF080D18) : const Color(0xFFF2F5FA),
       cardTheme: CardThemeData(
-        color: dark ? const Color(0xFF111827) : Colors.white,
+        color: dark ? const Color(0xFF121B2B) : Colors.white,
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
@@ -82,16 +92,13 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  int selectedTab = 0;
+  int pageIndex = 0;
 
-  final TextEditingController urlController =
-      TextEditingController();
+  final urlController = TextEditingController();
+  final nameController = TextEditingController();
 
-  final TextEditingController nameController =
-      TextEditingController();
-
-  bool adding = false;
-  String? message;
+  bool isAdding = false;
+  String? errorMessage;
 
   Transfers get transfers => FileDownloader().transfers;
 
@@ -103,44 +110,34 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> addDownload() async {
-    final url = urlController.text.trim();
-
-    if (url.isEmpty) {
-      setState(() => message = 'أدخل رابط التنزيل أولاً');
-      return;
-    }
-
-    final uri = Uri.tryParse(url);
+    final rawUrl = urlController.text.trim();
+    final uri = Uri.tryParse(rawUrl);
 
     if (uri == null ||
         !uri.hasAuthority ||
-        !(uri.scheme == 'https' || uri.scheme == 'http')) {
+        (uri.scheme != 'http' && uri.scheme != 'https')) {
       setState(() {
-        message =
-            'الرابط غير صالح. استخدم رابط HTTP أو HTTPS مباشر.';
+        errorMessage = 'أدخل رابط HTTP أو HTTPS صحيحاً';
       });
       return;
     }
 
     setState(() {
-      adding = true;
-      message = null;
+      isAdding = true;
+      errorMessage = null;
     });
 
     try {
       var filename = nameController.text.trim();
 
       if (filename.isEmpty) {
-        filename = Uri.decodeComponent(
-          uri.pathSegments.isNotEmpty
-              ? uri.pathSegments.last
-              : 'download_${DateTime.now().millisecondsSinceEpoch}',
-        );
+        filename = uri.pathSegments.isNotEmpty
+            ? Uri.decodeComponent(uri.pathSegments.last)
+            : 'download_${DateTime.now().millisecondsSinceEpoch}';
       }
 
-      if (filename.isEmpty || filename == '/') {
-        filename =
-            'download_${DateTime.now().millisecondsSinceEpoch}';
+      if (filename.isEmpty) {
+        filename = 'download_${DateTime.now().millisecondsSinceEpoch}';
       }
 
       filename = filename.replaceAll(
@@ -153,9 +150,12 @@ class _HomePageState extends State<HomePage> {
         filename: filename,
         baseDirectory: BaseDirectory.applicationDocuments,
         directory: 'BAHMED_IDM',
-        updates: Updates.statusAndProgress,
         allowPause: true,
         retries: 2,
+        transferHints: {
+          TransferHint.userInitiated,
+          TransferHint.largeFile,
+        },
       );
 
       await transfers.start(task);
@@ -165,28 +165,29 @@ class _HomePageState extends State<HomePage> {
 
       if (mounted) {
         Navigator.pop(context);
+        setState(() => pageIndex = 1);
       }
     } catch (e) {
       setState(() {
-        message = 'تعذر بدء التنزيل: $e';
+        errorMessage = 'تعذر بدء التنزيل: $e';
       });
     } finally {
       if (mounted) {
-        setState(() => adding = false);
+        setState(() => isAdding = false);
       }
     }
   }
 
   void showAddDialog() {
-    message = null;
+    errorMessage = null;
 
     showDialog<void>(
       context: context,
       builder: (dialogContext) {
         return StatefulBuilder(
-          builder: (context, refreshDialog) {
+          builder: (context, refresh) {
             return AlertDialog(
-              title: const Text('إضافة تنزيل'),
+              title: const Text('تنزيل جديد'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -196,26 +197,23 @@ class _HomePageState extends State<HomePage> {
                       keyboardType: TextInputType.url,
                       decoration: const InputDecoration(
                         labelText: 'رابط الملف',
-                        hintText: 'https://example.com/file.zip',
                         prefixIcon: Icon(Icons.link),
+                        hintText: 'https://example.com/file.zip',
                       ),
                     ),
                     const SizedBox(height: 12),
                     TextField(
                       controller: nameController,
                       decoration: const InputDecoration(
-                        labelText: 'اسم الملف (اختياري)',
-                        prefixIcon:
-                            Icon(Icons.drive_file_rename_outline),
+                        labelText: 'اسم الملف',
+                        prefixIcon: Icon(Icons.drive_file_rename_outline),
                       ),
                     ),
-                    if (message != null) ...[
-                      const SizedBox(height: 10),
+                    if (errorMessage != null) ...[
+                      const SizedBox(height: 12),
                       Text(
-                        message!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                        ),
+                        errorMessage!,
+                        style: const TextStyle(color: Colors.red),
                       ),
                     ],
                   ],
@@ -223,29 +221,21 @@ class _HomePageState extends State<HomePage> {
               ),
               actions: [
                 TextButton(
-                  onPressed: adding
+                  onPressed: isAdding
                       ? null
                       : () => Navigator.pop(dialogContext),
                   child: const Text('إلغاء'),
                 ),
                 FilledButton.icon(
-                  onPressed: adding
+                  onPressed: isAdding
                       ? null
                       : () async {
-                          refreshDialog(() {});
+                          refresh(() {});
                           await addDownload();
-                          refreshDialog(() {});
+                          refresh(() {});
                         },
-                  icon: adding
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : const Icon(Icons.download),
-                  label: const Text('ابدأ التنزيل'),
+                  icon: const Icon(Icons.download),
+                  label: const Text('ابدأ'),
                 ),
               ],
             );
@@ -258,8 +248,10 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      _downloadsPage(),
-      _aboutPage(),
+      dashboardPage(),
+      downloadsPage(),
+      filesPage(),
+      settingsPage(),
     ];
 
     return Directionality(
@@ -277,24 +269,21 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
               Text(
-                'مدير التنزيلات',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.normal,
-                ),
+                'ADVANCED DOWNLOAD MANAGER',
+                style: TextStyle(fontSize: 10),
               ),
             ],
           ),
           actions: [
             IconButton(
-              tooltip: 'إضافة تنزيل',
               onPressed: showAddDialog,
               icon: const Icon(Icons.add_circle_outline),
+              tooltip: 'إضافة تنزيل',
             ),
           ],
         ),
-        body: pages[selectedTab],
-        floatingActionButton: selectedTab == 0
+        body: pages[pageIndex],
+        floatingActionButton: pageIndex == 1
             ? FloatingActionButton.extended(
                 onPressed: showAddDialog,
                 icon: const Icon(Icons.add),
@@ -302,19 +291,30 @@ class _HomePageState extends State<HomePage> {
               )
             : null,
         bottomNavigationBar: NavigationBar(
-          selectedIndex: selectedTab,
+          selectedIndex: pageIndex,
           onDestinationSelected: (value) {
-            setState(() => selectedTab = value);
+            setState(() => pageIndex = value);
           },
           destinations: const [
             NavigationDestination(
-              icon: Icon(Icons.download_for_offline_outlined),
-              selectedIcon: Icon(Icons.download_for_offline),
+              icon: Icon(Icons.dashboard_outlined),
+              selectedIcon: Icon(Icons.dashboard),
+              label: 'الرئيسية',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.download_outlined),
+              selectedIcon: Icon(Icons.download),
               label: 'التنزيلات',
             ),
             NavigationDestination(
-              icon: Icon(Icons.info_outline),
-              label: 'حول التطبيق',
+              icon: Icon(Icons.folder_outlined),
+              selectedIcon: Icon(Icons.folder),
+              label: 'الملفات',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.settings_outlined),
+              selectedIcon: Icon(Icons.settings),
+              label: 'الإعدادات',
             ),
           ],
         ),
@@ -322,91 +322,225 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _downloadsPage() {
+  Widget dashboardPage() {
     return ValueListenableBuilder<List<Transfer>>(
       valueListenable: transfers.notifier,
       builder: (context, items, _) {
-        if (items.isEmpty) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(28),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+        final active = items.where((item) {
+          return item.status == TaskStatus.running ||
+              item.status == TaskStatus.enqueued ||
+              item.status == TaskStatus.paused;
+        }).length;
+
+        final completed = items
+            .where((item) => item.status == TaskStatus.complete)
+            .length;
+
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(22),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(22),
+                gradient: const LinearGradient(
+                  colors: [
+                    Color(0xFF063A60),
+                    Color(0xFF007EAA),
+                    Color(0xFF00C9E8),
+                  ],
+                ),
+              ),
+              child: const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(
-                    Icons.cloud_download_outlined,
-                    size: 76,
-                    color: Color(0xFF00BCD4),
-                  ),
-                  const SizedBox(height: 18),
-                  const Text(
-                    'لا توجد تنزيلات بعد',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
+                  Icon(Icons.bolt, color: Colors.white, size: 38),
+                  SizedBox(height: 12),
                   Text(
-                    'أضف رابط ملف مباشر لبدء أول تنزيل.',
+                    'BAHMED IDM',
                     style: TextStyle(
-                      color: Theme.of(context)
-                          .textTheme
-                          .bodySmall
-                          ?.color,
+                      color: Colors.white,
+                      fontSize: 27,
+                      fontWeight: FontWeight.w900,
                     ),
+                  ),
+                  Text(
+                    'تحكم كامل في تنزيلاتك',
+                    style: TextStyle(color: Colors.white70),
                   ),
                 ],
               ),
             ),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Expanded(
+                  child: statisticCard(
+                    'التنزيلات',
+                    '${items.length}',
+                    Icons.download,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: statisticCard(
+                    'النشطة',
+                    '$active',
+                    Icons.sync,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: statisticCard(
+                    'المكتملة',
+                    '$completed',
+                    Icons.check_circle_outline,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 22),
+            const Text(
+              'أحدث التنزيلات',
+              style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            if (items.isEmpty)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(30),
+                  child: Text('لا توجد تنزيلات حتى الآن'),
+                ),
+              )
+            else
+              ...items.take(3).map(
+                    (item) => TransferCard(transfer: item),
+                  ),
+            const SizedBox(height: 15),
+            FilledButton.icon(
+              onPressed: showAddDialog,
+              icon: const Icon(Icons.add),
+              label: const Text('إضافة تنزيل جديد'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget statisticCard(String title, String value, IconData icon) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 8),
+        child: Column(
+          children: [
+            Icon(icon, color: const Color(0xFF00BCD4)),
+            const SizedBox(height: 8),
+            Text(
+              value,
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(title, style: const TextStyle(fontSize: 11)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget downloadsPage() {
+    return ValueListenableBuilder<List<Transfer>>(
+      valueListenable: transfers.notifier,
+      builder: (context, items, _) {
+        if (items.isEmpty) {
+          return const Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.cloud_download_outlined,
+                  size: 75,
+                  color: Color(0xFF00BCD4),
+                ),
+                SizedBox(height: 12),
+                Text('قائمة التنزيلات فارغة'),
+              ],
+            ),
           );
         }
 
-        return ListView.separated(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 90),
+        return ListView.builder(
+          padding: const EdgeInsets.all(12),
           itemCount: items.length,
-          separatorBuilder: (_, __) =>
-              const SizedBox(height: 8),
           itemBuilder: (context, index) {
-            return TransferCard(
-              key: ValueKey(items[index].taskId),
-              transfer: items[index],
-            );
+            return TransferCard(transfer: items[index]);
           },
         );
       },
     );
   }
 
-  Widget _aboutPage() {
+  Widget filesPage() {
     return const Center(
       child: Padding(
         padding: EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.bolt,
-              size: 64,
-              color: Color(0xFF00BCD4),
-            ),
-            SizedBox(height: 12),
+            Icon(Icons.folder_open, size: 70, color: Color(0xFF00BCD4)),
+            SizedBox(height: 15),
             Text(
-              'BAHMED IDM',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.w900,
-              ),
+              'مجلد الملفات',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
             ),
             SizedBox(height: 8),
             Text(
-              'مدير تنزيلات للروابط المباشرة عبر HTTP وHTTPS.\n'
-              'قد لا تعمل روابط صفحات التواصل الاجتماعي كرابط ملف مباشر.',
+              'تُحفظ الملفات داخل مجلد التطبيق الخاص حالياً. '
+              'سيُضاف متصفح الملفات ونقل الملفات إلى مجلد التنزيلات العام '
+              'بعد تجهيز صلاحيات Android.',
               textAlign: TextAlign.center,
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget settingsPage() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text(
+          'الإعدادات',
+          style: TextStyle(fontSize: 23, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 15),
+        Card(
+          child: SwitchListTile(
+            secondary: const Icon(Icons.dark_mode_outlined),
+            title: const Text('الوضع الليلي'),
+            subtitle: const Text('التبديل بين المظهر الداكن والفاتح'),
+            value: appSettings.themeMode == ThemeMode.dark,
+            onChanged: (_) => appSettings.toggleTheme(),
+          ),
+        ),
+        const Card(
+          child: ListTile(
+            leading: Icon(Icons.language),
+            title: Text('لغة التطبيق'),
+            subtitle: Text('العربية'),
+          ),
+        ),
+        const Card(
+          child: ListTile(
+            leading: Icon(Icons.info_outline),
+            title: Text('BAHMED IDM'),
+            subtitle: Text('مدير التنزيلات'),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -419,33 +553,45 @@ class TransferCard extends StatelessWidget {
 
   final Transfer transfer;
 
-  String statusName(TaskStatus status) {
+  String statusText(TaskStatus status) {
     return switch (status) {
       TaskStatus.enqueued => 'في قائمة الانتظار',
       TaskStatus.running => 'جارٍ التنزيل',
-      TaskStatus.complete => 'مكتمل',
+      TaskStatus.complete => 'اكتمل التنزيل',
       TaskStatus.failed => 'فشل التنزيل',
-      TaskStatus.canceled => 'أُلغي',
+      TaskStatus.canceled => 'تم الإلغاء',
       TaskStatus.paused => 'متوقف مؤقتاً',
-      TaskStatus.waitingToRetry => 'بانتظار إعادة المحاولة',
+      TaskStatus.waitingToRetry => 'إعادة المحاولة',
       TaskStatus.notFound => 'المهمة غير موجودة',
       _ => status.name,
     };
   }
 
-  String speedText(double speed) {
-    return speed < 0
-        ? '—'
-        : '${speed.toStringAsFixed(2)} MB/s';
+  String formatDuration(Duration duration) {
+    if (duration.inSeconds <= 0) return 'غير معروف';
+
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+
+    if (hours > 0) {
+      return '${hours}س ${minutes}د';
+    }
+
+    if (minutes > 0) {
+      return '${minutes}د ${seconds}ث';
+    }
+
+    return '${seconds}ث';
   }
 
   @override
   Widget build(BuildContext context) {
     return Card(
+      margin: const EdgeInsets.only(bottom: 10),
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
@@ -459,24 +605,14 @@ class TransferCard extends StatelessWidget {
                     transfer.task.filename,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
                 PopupMenuButton<String>(
                   onSelected: (value) async {
-                    if (value == 'pause') {
-                      await transfer.pause();
-                    }
-
-                    if (value == 'resume') {
-                      await transfer.resume();
-                    }
-
-                    if (value == 'cancel') {
-                      await transfer.cancel();
-                    }
+                    if (value == 'pause') await transfer.pause();
+                    if (value == 'resume') await transfer.resume();
+                    if (value == 'cancel') await transfer.cancel();
                   },
                   itemBuilder: (_) => const [
                     PopupMenuItem(
@@ -489,7 +625,7 @@ class TransferCard extends StatelessWidget {
                     ),
                     PopupMenuItem(
                       value: 'cancel',
-                      child: Text('إلغاء التنزيل'),
+                      child: Text('إلغاء'),
                     ),
                   ],
                 ),
@@ -499,19 +635,12 @@ class TransferCard extends StatelessWidget {
             ValueListenableBuilder<TaskStatus>(
               valueListenable: transfer.statusNotifier,
               builder: (context, status, _) {
-                return Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        statusName(status),
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
-                    Text(
-                      speedText(transfer.networkSpeed),
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
+                return Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    statusText(status),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 );
               },
             ),
@@ -524,14 +653,14 @@ class TransferCard extends StatelessWidget {
                     LinearProgressIndicator(
                       value: progress,
                       minHeight: 7,
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     const SizedBox(height: 6),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: Text(
                         progress == null
-                            ? 'جارٍ تحديد الحجم...'
+                            ? 'يتم تحديد التقدم'
                             : '${(progress * 100).toStringAsFixed(1)}%',
                       ),
                     ),
@@ -539,12 +668,41 @@ class TransferCard extends StatelessWidget {
                 );
               },
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
+            ValueListenableBuilder<double>(
+              valueListenable: transfer.networkSpeedNotifier,
+              builder: (context, speed, _) {
+                return Row(
+                  children: [
+                    const Icon(Icons.speed, size: 17),
+                    const SizedBox(width: 5),
+                    Text(
+                      speed < 0
+                          ? 'السرعة: —'
+                          : 'السرعة: ${speed.toStringAsFixed(2)} MB/s',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const Spacer(),
+                    const Icon(Icons.timer_outlined, size: 17),
+                    const SizedBox(width: 5),
+                    ValueListenableBuilder<Duration>(
+                      valueListenable: transfer.timeRemainingNotifier,
+                      builder: (context, duration, _) {
+                        return Text(
+                          formatDuration(duration),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        );
+                      },
+                    ),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 8),
             ValueListenableBuilder<TaskStatus>(
               valueListenable: transfer.statusNotifier,
               builder: (context, status, _) {
-                return Wrap(
-                  spacing: 8,
+                return Row(
                   children: [
                     if (status == TaskStatus.running ||
                         status == TaskStatus.enqueued)
@@ -560,8 +718,9 @@ class TransferCard extends StatelessWidget {
                         icon: const Icon(Icons.play_arrow),
                         label: const Text('استئناف'),
                       ),
-                    if (!status.isFinalState ||
-                        status == TaskStatus.failed)
+                    if (status != TaskStatus.complete &&
+                        status != TaskStatus.canceled &&
+                        status != TaskStatus.notFound)
                       TextButton.icon(
                         onPressed: () => transfer.cancel(),
                         icon: const Icon(Icons.close),
@@ -576,153 +735,4 @@ class TransferCard extends StatelessWidget {
       ),
     );
   }
-}    child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: const Color(0xFF00C9A7)),
-            const SizedBox(height: 12),
-            Text(
-              value,
-              style: const TextStyle(
-                fontSize: 23,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            Text(title),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget downloadList() {
-    if (downloads.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.download_for_offline,
-              size: 75,
-              color: Color(0xFF00C9A7),
-            ),
-            SizedBox(height: 15),
-            Text(
-              'لا توجد تنزيلات حالياً',
-              style: TextStyle(fontSize: 18),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(12),
-      itemCount: downloads.length,
-      itemBuilder: (context, index) {
-        final item = downloads[index];
-
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.insert_drive_file,
-                      color: Color(0xFF00C9A7),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        item.task.filename,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => cancelDownload(item),
-                      icon: const Icon(
-                        Icons.delete_outline,
-                        color: Colors.redAccent,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                LinearProgressIndicator(
-                  value: item.progress >= 0 ? item.progress : null,
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      '${(item.progress * 100).clamp(0, 100).toStringAsFixed(1)}%',
-                    ),
-                    Text(item.status.name),
-                  ],
-                ),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    IconButton(
-                      onPressed: () => pauseDownload(item),
-                      icon: const Icon(Icons.pause),
-                    ),
-                    IconButton(
-                      onPressed: () => resumeDownload(item),
-                      icon: const Icon(Icons.play_arrow),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget settingsPage() {
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        const Text(
-          'الإعدادات',
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 15),
-        Card(
-          child: SwitchListTile(
-            title: const Text('الوضع الليلي'),
-            subtitle: const Text('تغيير مظهر التطبيق'),
-            secondary: const Icon(Icons.palette),
-            value: widget.isDark,
-            onChanged: (_) => widget.onThemeChanged(),
-          ),
-        ),
-        const Card(
-          child: ListTile(
-            leading: Icon(Icons.info_outline),
-            title: Text('حول التطبيق'),
-            subtitle: Text('BAHMED IDM'),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class DownloadItem {
-  final DownloadTask task;
-
-  double progress = 0;
-  TaskStatus status = TaskStatus.enqueued;
-
-  DownloadItem({required this.task});
 }
