@@ -1,11 +1,10 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:background_downloader/background_downloader.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await FileDownloader().start();
+  await FileDownloader().start(autoCleanDatabase: true);
 
   FileDownloader().configureNotification(
     running: const TaskNotification(
@@ -16,373 +15,568 @@ Future<void> main() async {
       'اكتمل التنزيل',
       '{filename}',
     ),
+    error: const TaskNotification(
+      'تعذر التنزيل',
+      '{filename}',
+    ),
     progressBar: true,
+    tapOpensFile: true,
   );
 
   runApp(const BahmedIDM());
 }
 
-class BahmedIDM extends StatefulWidget {
+class BahmedIDM extends StatelessWidget {
   const BahmedIDM({super.key});
-
-  @override
-  State<BahmedIDM> createState() => _BahmedIDMState();
-}
-
-class _BahmedIDMState extends State<BahmedIDM> {
-  ThemeMode themeMode = ThemeMode.dark;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'BAHMED IDM',
-      themeMode: themeMode,
-      theme: ThemeData(
-        brightness: Brightness.light,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF00C9A7),
-          brightness: Brightness.light,
-        ),
-        useMaterial3: true,
+      theme: _theme(Brightness.light),
+      darkTheme: _theme(Brightness.dark),
+      themeMode: ThemeMode.dark,
+      home: const HomePage(),
+    );
+  }
+
+  ThemeData _theme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+
+    final scheme = ColorScheme.fromSeed(
+      seedColor: const Color(0xFF00E5FF),
+      brightness: brightness,
+      surface: dark ? const Color(0xFF111827) : Colors.white,
+    );
+
+    return ThemeData(
+      useMaterial3: true,
+      brightness: brightness,
+      colorScheme: scheme,
+      scaffoldBackgroundColor:
+          dark ? const Color(0xFF090E18) : const Color(0xFFF3F6FA),
+      appBarTheme: AppBarTheme(
+        backgroundColor:
+            dark ? const Color(0xFF090E18) : Colors.white,
+        foregroundColor:
+            dark ? Colors.white : Colors.black87,
+        centerTitle: false,
       ),
-      darkTheme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF0B0F19),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF00E5B0),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
-      home: Directionality(
-        textDirection: TextDirection.rtl,
-        child: DownloadHome(
-          isDark: themeMode == ThemeMode.dark,
-          onThemeChanged: () {
-            setState(() {
-              themeMode = themeMode == ThemeMode.dark
-                  ? ThemeMode.light
-                  : ThemeMode.dark;
-            });
-          },
+      cardTheme: CardThemeData(
+        color: dark ? const Color(0xFF111827) : Colors.white,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
         ),
       ),
     );
   }
 }
 
-class DownloadHome extends StatefulWidget {
-  final bool isDark;
-  final VoidCallback onThemeChanged;
-
-  const DownloadHome({
-    super.key,
-    required this.isDark,
-    required this.onThemeChanged,
-  });
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
 
   @override
-  State<DownloadHome> createState() => _DownloadHomeState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _DownloadHomeState extends State<DownloadHome> {
-  final List<DownloadItem> downloads = [];
-  final StreamController<void> refreshController =
-      StreamController<void>.broadcast();
+class _HomePageState extends State<HomePage> {
+  int selectedTab = 0;
 
-  int page = 0;
+  final TextEditingController urlController =
+      TextEditingController();
+
+  final TextEditingController nameController =
+      TextEditingController();
+
+  bool adding = false;
+  String? message;
+
+  Transfers get transfers => FileDownloader().transfers;
 
   @override
   void dispose() {
-    refreshController.close();
+    urlController.dispose();
+    nameController.dispose();
     super.dispose();
   }
 
   Future<void> addDownload() async {
-    final urlController = TextEditingController();
+    final url = urlController.text.trim();
 
-    final url = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('إضافة تنزيل'),
-        content: TextField(
-          controller: urlController,
-          textDirection: TextDirection.ltr,
-          keyboardType: TextInputType.url,
-          decoration: const InputDecoration(
-            hintText: 'https://example.com/file.zip',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('إلغاء'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(context, urlController.text.trim());
-            },
-            child: const Text('تنزيل'),
-          ),
-        ],
-      ),
-    );
-
-    urlController.dispose();
-
-    if (url == null || url.isEmpty) return;
+    if (url.isEmpty) {
+      setState(() => message = 'أدخل رابط التنزيل أولاً');
+      return;
+    }
 
     final uri = Uri.tryParse(url);
 
     if (uri == null ||
-        !uri.hasScheme ||
-        (uri.scheme != 'http' && uri.scheme != 'https') ||
-        uri.host.isEmpty) {
-      showMessage('الرابط غير صالح. استخدم رابط HTTP أو HTTPS.');
+        !uri.hasAuthority ||
+        !(uri.scheme == 'https' || uri.scheme == 'http')) {
+      setState(() {
+        message =
+            'الرابط غير صالح. استخدم رابط HTTP أو HTTPS مباشر.';
+      });
       return;
     }
 
-    final filename = uri.pathSegments.isNotEmpty &&
-            uri.pathSegments.last.isNotEmpty
-        ? Uri.decodeComponent(uri.pathSegments.last)
-        : 'download_${DateTime.now().millisecondsSinceEpoch}';
-
-    final task = DownloadTask(
-      url: url,
-      filename: filename,
-      baseDirectory: BaseDirectory.applicationDocuments,
-      directory: 'downloads',
-      allowPause: true,
-      retries: 3,
-      transferHints: {
-        TransferHint.userInitiated,
-        TransferHint.largeFile,
-      },
-    );
-
-    final item = DownloadItem(task: task);
-
     setState(() {
-      downloads.insert(0, item);
+      adding = true;
+      message = null;
     });
 
     try {
-      final success = await FileDownloader().enqueue(task);
+      var filename = nameController.text.trim();
 
-      if (!success) {
-        showMessage('تعذر إضافة مهمة التنزيل.');
-      } else {
-        showMessage('تمت إضافة التنزيل.');
+      if (filename.isEmpty) {
+        filename = Uri.decodeComponent(
+          uri.pathSegments.isNotEmpty
+              ? uri.pathSegments.last
+              : 'download_${DateTime.now().millisecondsSinceEpoch}',
+        );
+      }
+
+      if (filename.isEmpty || filename == '/') {
+        filename =
+            'download_${DateTime.now().millisecondsSinceEpoch}';
+      }
+
+      filename = filename.replaceAll(
+        RegExp(r'[\\/:*?"<>|]'),
+        '_',
+      );
+
+      final task = DownloadTask(
+        url: uri.toString(),
+        filename: filename,
+        baseDirectory: BaseDirectory.applicationDocuments,
+        directory: 'BAHMED_IDM',
+        updates: Updates.statusAndProgress,
+        allowPause: true,
+        retries: 2,
+      );
+
+      await transfers.start(task);
+
+      urlController.clear();
+      nameController.clear();
+
+      if (mounted) {
+        Navigator.pop(context);
       }
     } catch (e) {
-      showMessage('تعذر بدء التنزيل: $e');
+      setState(() {
+        message = 'تعذر بدء التنزيل: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => adding = false);
+      }
     }
   }
 
-  Future<void> pauseDownload(DownloadItem item) async {
-    final success = await FileDownloader().pause(item.task);
+  void showAddDialog() {
+    message = null;
 
-    if (!success) {
-      showMessage('تعذر إيقاف التنزيل مؤقتاً.');
-    }
-  }
-
-  Future<void> resumeDownload(DownloadItem item) async {
-    final success = await FileDownloader().resume(item.task);
-
-    if (!success) {
-      showMessage('تعذر استئناف التنزيل.');
-    }
-  }
-
-  Future<void> cancelDownload(DownloadItem item) async {
-    await FileDownloader().cancelTaskWithId(item.task.taskId);
-
-    setState(() {
-      downloads.remove(item);
-    });
-
-    showMessage('تم إلغاء المهمة.');
-  }
-
-  void showMessage(String message) {
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, refreshDialog) {
+            return AlertDialog(
+              title: const Text('إضافة تنزيل'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: urlController,
+                      keyboardType: TextInputType.url,
+                      decoration: const InputDecoration(
+                        labelText: 'رابط الملف',
+                        hintText: 'https://example.com/file.zip',
+                        prefixIcon: Icon(Icons.link),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'اسم الملف (اختياري)',
+                        prefixIcon:
+                            Icon(Icons.drive_file_rename_outline),
+                      ),
+                    ),
+                    if (message != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        message!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: adding
+                      ? null
+                      : () => Navigator.pop(dialogContext),
+                  child: const Text('إلغاء'),
+                ),
+                FilledButton.icon(
+                  onPressed: adding
+                      ? null
+                      : () async {
+                          refreshDialog(() {});
+                          await addDownload();
+                          refreshDialog(() {});
+                        },
+                  icon: adding
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(Icons.download),
+                  label: const Text('ابدأ التنزيل'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Row(
-          children: [
-            Icon(Icons.bolt, color: Color(0xFF00E5B0)),
-            SizedBox(width: 8),
-            Text(
-              'BAHMED IDM',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            onPressed: widget.onThemeChanged,
-            icon: Icon(
-              widget.isDark ? Icons.light_mode : Icons.dark_mode,
-            ),
-          ),
-        ],
-      ),
-      body: IndexedStack(
-        index: page,
-        children: [
-          dashboard(),
-          downloadList(),
-          settingsPage(),
-        ],
-      ),
-      floatingActionButton: page == 0 || page == 1
-          ? FloatingActionButton.extended(
-              onPressed: addDownload,
-              icon: const Icon(Icons.add),
-              label: const Text('تنزيل جديد'),
-            )
-          : null,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: page,
-        onDestinationSelected: (value) {
-          setState(() => page = value);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.dashboard),
-            label: 'الرئيسية',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.download),
-            label: 'التنزيلات',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings),
-            label: 'الإعدادات',
-          ),
-        ],
-      ),
-    );
-  }
+    final pages = [
+      _downloadsPage(),
+      _aboutPage(),
+    ];
 
-  Widget dashboard() {
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(22),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [
-                Color(0xFF087F70),
-                Color(0xFF063D52),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(22),
-          ),
-          child: const Column(
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                Icons.rocket_launch,
-                size: 38,
-                color: Colors.white,
-              ),
-              SizedBox(height: 15),
               Text(
-                'مرحباً بك في BAHMED IDM',
+                'BAHMED IDM',
                 style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1,
                 ),
               ),
-              SizedBox(height: 8),
               Text(
-                'مدير التنزيلات الخاص بك',
-                style: TextStyle(color: Colors.white70),
+                'مدير التنزيلات',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.normal,
+                ),
               ),
             ],
           ),
-        ),
-        const SizedBox(height: 22),
-        Row(
-          children: [
-            Expanded(
-              child: statCard(
-                'إجمالي المهام',
-                downloads.length.toString(),
-                Icons.download,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: statCard(
-                'المكتملة',
-                downloads
-                    .where((e) => e.status == TaskStatus.complete)
-                    .length
-                    .toString(),
-                Icons.check_circle,
-              ),
+          actions: [
+            IconButton(
+              tooltip: 'إضافة تنزيل',
+              onPressed: showAddDialog,
+              icon: const Icon(Icons.add_circle_outline),
             ),
           ],
         ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: statCard(
-                'قيد التنزيل',
-                downloads
-                    .where((e) => e.status == TaskStatus.running)
-                    .length
-                    .toString(),
-                Icons.downloading,
-              ),
+        body: pages[selectedTab],
+        floatingActionButton: selectedTab == 0
+            ? FloatingActionButton.extended(
+                onPressed: showAddDialog,
+                icon: const Icon(Icons.add),
+                label: const Text('تنزيل جديد'),
+              )
+            : null,
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: selectedTab,
+          onDestinationSelected: (value) {
+            setState(() => selectedTab = value);
+          },
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.download_for_offline_outlined),
+              selectedIcon: Icon(Icons.download_for_offline),
+              label: 'التنزيلات',
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: statCard(
-                'المتوقفة',
-                downloads
-                    .where((e) => e.status == TaskStatus.paused)
-                    .length
-                    .toString(),
-                Icons.pause_circle,
-              ),
+            NavigationDestination(
+              icon: Icon(Icons.info_outline),
+              label: 'حول التطبيق',
             ),
           ],
         ),
-        const SizedBox(height: 24),
-        FilledButton.icon(
-          onPressed: addDownload,
-          icon: const Icon(Icons.add_link),
-          label: const Text('إضافة رابط جديد'),
-          style: FilledButton.styleFrom(
-            padding: const EdgeInsets.all(17),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
-  Widget statCard(String title, String value, IconData icon) {
+  Widget _downloadsPage() {
+    return ValueListenableBuilder<List<Transfer>>(
+      valueListenable: transfers.notifier,
+      builder: (context, items, _) {
+        if (items.isEmpty) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.cloud_download_outlined,
+                    size: 76,
+                    color: Color(0xFF00BCD4),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'لا توجد تنزيلات بعد',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'أضف رابط ملف مباشر لبدء أول تنزيل.',
+                    style: TextStyle(
+                      color: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.color,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return ListView.separated(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 90),
+          itemCount: items.length,
+          separatorBuilder: (_, __) =>
+              const SizedBox(height: 8),
+          itemBuilder: (context, index) {
+            return TransferCard(
+              key: ValueKey(items[index].taskId),
+              transfer: items[index],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _aboutPage() {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.bolt,
+              size: 64,
+              color: Color(0xFF00BCD4),
+            ),
+            SizedBox(height: 12),
+            Text(
+              'BAHMED IDM',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'مدير تنزيلات للروابط المباشرة عبر HTTP وHTTPS.\n'
+              'قد لا تعمل روابط صفحات التواصل الاجتماعي كرابط ملف مباشر.',
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class TransferCard extends StatelessWidget {
+  const TransferCard({
+    super.key,
+    required this.transfer,
+  });
+
+  final Transfer transfer;
+
+  String statusName(TaskStatus status) {
+    return switch (status) {
+      TaskStatus.enqueued => 'في قائمة الانتظار',
+      TaskStatus.running => 'جارٍ التنزيل',
+      TaskStatus.complete => 'مكتمل',
+      TaskStatus.failed => 'فشل التنزيل',
+      TaskStatus.canceled => 'أُلغي',
+      TaskStatus.paused => 'متوقف مؤقتاً',
+      TaskStatus.waitingToRetry => 'بانتظار إعادة المحاولة',
+      TaskStatus.notFound => 'المهمة غير موجودة',
+      _ => status.name,
+    };
+  }
+
+  String speedText(double speed) {
+    return speed < 0
+        ? '—'
+        : '${speed.toStringAsFixed(2)} MB/s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(14),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.insert_drive_file_outlined,
+                  color: Color(0xFF00BCD4),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    transfer.task.filename,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  onSelected: (value) async {
+                    if (value == 'pause') {
+                      await transfer.pause();
+                    }
+
+                    if (value == 'resume') {
+                      await transfer.resume();
+                    }
+
+                    if (value == 'cancel') {
+                      await transfer.cancel();
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(
+                      value: 'pause',
+                      child: Text('إيقاف مؤقت'),
+                    ),
+                    PopupMenuItem(
+                      value: 'resume',
+                      child: Text('استئناف'),
+                    ),
+                    PopupMenuItem(
+                      value: 'cancel',
+                      child: Text('إلغاء التنزيل'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ValueListenableBuilder<TaskStatus>(
+              valueListenable: transfer.statusNotifier,
+              builder: (context, status, _) {
+                return Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        statusName(status),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                    Text(
+                      speedText(transfer.networkSpeed),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 10),
+            ValueListenableBuilder<double?>(
+              valueListenable: transfer.progressNotifier,
+              builder: (context, progress, _) {
+                return Column(
+                  children: [
+                    LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 7,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    const SizedBox(height: 6),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        progress == null
+                            ? 'جارٍ تحديد الحجم...'
+                            : '${(progress * 100).toStringAsFixed(1)}%',
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 6),
+            ValueListenableBuilder<TaskStatus>(
+              valueListenable: transfer.statusNotifier,
+              builder: (context, status, _) {
+                return Wrap(
+                  spacing: 8,
+                  children: [
+                    if (status == TaskStatus.running ||
+                        status == TaskStatus.enqueued)
+                      TextButton.icon(
+                        onPressed: () => transfer.pause(),
+                        icon: const Icon(Icons.pause),
+                        label: const Text('إيقاف'),
+                      ),
+                    if (status == TaskStatus.paused ||
+                        status == TaskStatus.failed)
+                      TextButton.icon(
+                        onPressed: () => transfer.resume(),
+                        icon: const Icon(Icons.play_arrow),
+                        label: const Text('استئناف'),
+                      ),
+                    if (!status.isFinalState ||
+                        status == TaskStatus.failed)
+                      TextButton.icon(
+                        onPressed: () => transfer.cancel(),
+                        icon: const Icon(Icons.close),
+                        label: const Text('إلغاء'),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}    child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(icon, color: const Color(0xFF00C9A7)),
