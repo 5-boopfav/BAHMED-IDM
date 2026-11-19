@@ -1,36 +1,44 @@
-name: BAHMED IDM - Flutter Check
+name: BAHMED IDM Android Build
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
-  workflow_dispatch:
+      - master
 
 jobs:
-  check:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Flutter
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: '3.47.0'
           cache: true
 
-      - name: Generate Android project files
+      - name: Create Android platform files
         run: flutter create --platforms=android --project-name bahmed_idm .
 
-      - name: Install dependencies
+      - name: Resolve packages
         run: flutter pub get
 
-      - name: Check Dart code
+      - name: Analyze
         run: flutter analyze
+
+      - name: Test
+        run: flutter test
 
       - name: Build release APK
         run: flutter build apk --release
@@ -38,5 +46,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: BAHMED-IDM-APK
+          name: bahmed-idm-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
