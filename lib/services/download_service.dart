@@ -1,37 +1,71 @@
-class DownloadItem {
-  final String id;
-  final String url;
-  final String filename;
-  final String savePath;
-  final DateTime createdAt;
+import 'dart:convert';
 
-  const DownloadItem({
-    required this.id,
-    required this.url,
-    required this.filename,
-    required this.savePath,
-    required this.createdAt,
-  });
+import 'package:shared_preferences/shared_preferences.dart';
 
-  // تحويل البيانات إلى صيغة قابلة للحفظ
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'url': url,
-      'filename': filename,
-      'savePath': savePath,
-      'createdAt': createdAt.toIso8601String(),
-    };
+import '../models/download_item.dart';
+
+class DownloadStorage {
+  DownloadStorage._();
+
+  static final DownloadStorage instance = DownloadStorage._();
+
+  static const String _storageKey = 'bahmed_download_history';
+
+  final SharedPreferencesAsync _preferences = SharedPreferencesAsync();
+
+  // حفظ سجل التنزيلات
+  Future<void> saveDownloads(List<DownloadItem> downloads) async {
+    final data = downloads.map((item) => item.toJson()).toList();
+
+    await _preferences.setString(
+      _storageKey,
+      jsonEncode(data),
+    );
   }
 
-  // استرجاع البيانات من الصيغة المحفوظة
-  factory DownloadItem.fromJson(Map<String, dynamic> json) {
-    return DownloadItem(
-      id: json['id'] as String,
-      url: json['url'] as String,
-      filename: json['filename'] as String,
-      savePath: json['savePath'] as String,
-      createdAt: DateTime.parse(json['createdAt'] as String),
-    );
+  // استرجاع سجل التنزيلات
+  Future<List<DownloadItem>> loadDownloads() async {
+    final savedData = await _preferences.getString(_storageKey);
+
+    if (savedData == null || savedData.isEmpty) {
+      return [];
+    }
+
+    try {
+      final decodedData = jsonDecode(savedData) as List<dynamic>;
+
+      return decodedData
+          .map(
+            (item) => DownloadItem.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ),
+          )
+          .toList();
+    } catch (error) {
+      return [];
+    }
+  }
+
+  // إضافة تنزيل إلى السجل
+  Future<void> addDownload(DownloadItem item) async {
+    final downloads = await loadDownloads();
+
+    downloads.insert(0, item);
+
+    await saveDownloads(downloads);
+  }
+
+  // حذف تنزيل من السجل
+  Future<void> deleteDownload(String id) async {
+    final downloads = await loadDownloads();
+
+    downloads.removeWhere((item) => item.id == id);
+
+    await saveDownloads(downloads);
+  }
+
+  // مسح السجل بالكامل
+  Future<void> clearHistory() async {
+    await _preferences.remove(_storageKey);
   }
 }
