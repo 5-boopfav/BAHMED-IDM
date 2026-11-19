@@ -1,11 +1,42 @@
-import 'package:flutter_test/flutter_test.dart';
-import 'package:bahmed_idm/main.dart';
+name: BAHMED IDM - Flutter Check
 
-void main() {
-  testWidgets('BAHMED IDM starts correctly', (WidgetTester tester) async {
-    await tester.pumpWidget(const BahmedIDM());
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
 
-    expect(find.text('BAHMED IDM'), findsOneWidget);
-    expect(find.text('مرحباً بك في BAHMED IDM'), findsOneWidget);
-  });
-}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android project files
+        run: flutter create --platforms=android --project-name bahmed_idm .
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Check Dart code
+        run: flutter analyze
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BAHMED-IDM-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
