@@ -609,7 +609,6 @@ class TransferCard extends StatelessWidget {
       TaskStatus.paused => 'متوقف مؤقتاً',
       TaskStatus.waitingToRetry => 'إعادة المحاولة تلقائياً',
       TaskStatus.notFound => 'المهمة غير موجودة',
-      _ => status.name,
     };
   }
 
